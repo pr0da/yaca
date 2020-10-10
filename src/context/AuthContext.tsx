@@ -66,7 +66,7 @@ const authReducer = (prevState: AuthState, action: AuthAction): AuthState => {
   }
 };
 
-const { githubClientId } = Constants.manifest.extra ?? {};
+const { githubClientId, authApiUrl } = Constants.manifest.extra ?? {};
 
 // Endpoint
 const discovery = {
@@ -75,24 +75,22 @@ const discovery = {
   revocationEndpoint: `https://github.com/settings/connections/applications/${githubClientId}`,
 };
 
+let config = {
+  clientId: githubClientId,
+  redirectUri: makeRedirectUri({
+    // For usage in bare and standalone
+    native: 'your.app://redirect',
+  }),
+  // https://docs.github.com/en/free-pro-team@latest/developers/apps/scopes-for-oauth-apps
+  scopes: ['repo', 'user'],
+};
+
 WebBrowser.maybeCompleteAuthSession();
 
 export function AuthProvider(props: React.PropsWithChildren<{}>) {
   const { children } = props;
   const [state, dispatch] = React.useReducer(authReducer, initialState);
-  const [request, response, promptAsync] = useAuthRequest(
-    {
-      clientId: githubClientId,
-      // https://developer.github.com/apps/building-oauth-apps/understanding-scopes-for-oauth-apps/
-      scopes: ['repo'],
-      // For usage in managed apps using the proxy
-      redirectUri: makeRedirectUri({
-        // For usage in bare and standalone
-        native: 'your.app://redirect',
-      }),
-    },
-    discovery
-  );
+  const [request, response, promptAsync] = useAuthRequest(config, discovery);
 
   React.useEffect(() => {
     const bootstrapAsync = async () => {
@@ -102,7 +100,6 @@ export function AuthProvider(props: React.PropsWithChildren<{}>) {
       } catch (e) {
         // Restoring token failed
       }
-      console.log(userToken);
       dispatch({ type: 'RESTORE_TOKEN', payload: userToken });
     };
     bootstrapAsync();
@@ -114,8 +111,13 @@ export function AuthProvider(props: React.PropsWithChildren<{}>) {
       signIn: async () => {
         const result = await promptAsync();
         if (result.type === 'success') {
-          await SecureStore.setItemAsync('userToken', result.params.code);
-          dispatch({ type: 'SIGN_IN', payload: result.params.code });
+          // exchange code for access token
+          const response = await fetch(
+            `${authApiUrl}/access-token?code=${result.params.code}`
+          );
+          const { access_token: accessToken } = await response.json();
+          await SecureStore.setItemAsync('userToken', accessToken);
+          dispatch({ type: 'SIGN_IN', payload: accessToken });
         }
       },
       signOut: () => {
